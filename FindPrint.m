@@ -1,0 +1,261 @@
+% function [PairCheck, Delindex] = FindPrint(BrainPrint, TaskName, beh, freq, pthr)
+clc;clear all;close all;
+
+BP.datapath = 'C:\Users\bigting84\Desktop\USC Projects\Project #4 Cheng\data';
+BP.dataname = 'BP_control.mat';
+BP.subjecttitle = 'ID';
+BP.group(1).title = 'all';
+% BP.group(1).value = 0;
+% BP.group(1).title = 'Gender';
+% BP.group(1).value = 2;
+% BP.group(2).title = 'Condition';
+% BP.group(2).value = 1;
+BP.task(1).name = 'resting';
+
+BH.datapath = 'C:\Data\Cheng';
+BH.dataname = 'control.xlsx';
+BH.subjecttitle = 'Subject';
+BH.behtitle = 'DST';
+
+savepath = 'C:\Users\bigting84\Desktop\USC Projects\Project #4 Cheng\model';
+savename = 'DST_control_check.mat';
+pthr = 0.01;
+nsrc = 116;
+
+load('C:\Users\bigting84\Documents\MATLAB\DPABI_V3.0_171210\DPABI_V3.0_171210\Templates\aal_Labels.mat')
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+load(fullfile(BP.datapath, BP.dataname));
+[data, title] = xlsread(fullfile(BH.datapath, BH.dataname));
+
+
+for i = 1 : length(title)
+    if isequal(strtrim(title{i}), strtrim(BH.subjecttitle))
+        sublist_beh = data(:, i);
+    elseif isequal(strtrim(title{i}), strtrim(BH.behtitle))
+        beh = data(:, i);
+    end
+end
+
+con = [];
+ntask = length(BP.task);
+y = beh;
+bp = BrainPrint;
+
+infotitle_beh = bp(1).infotitle;
+for i = 1 : length(infotitle_beh)
+    if isequal(strtrim(infotitle_beh{i}), strtrim(BP.subjecttitle))
+        subindex = i;
+    end
+end
+
+subinfo = [];
+for i = 1 : length(bp)  
+    
+    tmp = 0;
+    for j = 1 : ntask
+        tmp = tmp + getfield(BrainPrint(i), BP.task(j).name);
+    end
+    
+    if ~isempty(tmp)
+        tmp = tmp / ntask;
+        con = abs(cat(4, con, tmp));
+        subinfo = [subinfo; bp(i).subjectinfo];
+    end
+    
+end
+sublist_bp = subinfo(:, subindex);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% below remove outliers
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% first remove outliers from connectivity matrix
+
+c = squeeze(sum(sum(sum(con))));
+delzero = find(c == 0);
+c(delzero) = [];
+con(:,:,:,delzero) = [];
+sublist_bp(delzero) = [];
+subinfo(delzero, :) = [];
+for loop = 1 : 10
+    delout = find(abs(zscore(c)) > 3.5);
+    c(delout) = [];
+    con(:,:,:,delout) = [];
+    sublist_bp(delout) = [];
+    subinfo(delout, :) = [];
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% then remove outliers from behavior data
+
+delnan = find(isnan(beh));
+delempty = find(isempty(beh));
+del = unique([delnan; delempty]);
+beh(del) = [];
+sublist_beh(delnan) = [];
+for loop = 1 : 10
+    delout = find(abs(zscore(beh)) > 3.5);
+    beh(delout) = [];
+    sublist_beh(delout) = [];
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% next align the behavior data and BP data with respect to subject IDs
+
+y = [];
+sublist_tmp = [];
+for i = 1 : length(sublist_bp)
+    index = find(ismember(sublist_beh, sublist_bp(i)));
+    y = [y; beh(index)];
+    sublist_tmp = [sublist_tmp; sublist_beh(index)];
+end
+index = find(ismember(sublist_bp, sublist_tmp));
+con = con(:,:,:,index);
+subinfo = subinfo(index, :);
+
+%%%% end of removing outliers
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% next select groups that will be analyzed
+
+
+if ~isequal(strtrim(BP.group(1).title), 'all')
+    
+    groupindex = [];
+    
+    for i = 1 : length(BP.group)
+        for j = 1 : length(infotitle_beh)
+            if isequal(strtrim(BP.group(i).title), strtrim(infotitle_beh{j}))
+                groupindex = [groupindex, j];
+            end
+        end
+    end
+    
+    index = 1 : length(y);
+    for i = 1 : length(BP.group)
+        index = intersect(index, find(subinfo(:, groupindex(i)) == BP.group(i).value));
+    end
+    
+    y = y(index);
+    con = con(:,:,:,index);
+end
+
+
+%%%% end of selecting groups
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+Rpos = zeros(nsrc,nsrc,4);
+Ppos = zeros(nsrc,nsrc,4);
+Rneg = zeros(nsrc,nsrc,4);
+Pneg = zeros(nsrc,nsrc,4);
+Tpos = zeros(nsrc,nsrc,4);
+Tneg = zeros(nsrc,nsrc,4);
+
+for f = 1 : 1
+    for i = 1 : nsrc-1
+        formatSpec = ['Processing source %d, in frequency band %d\n'];
+        fprintf(formatSpec, [i, f]);
+        for j = i+1 : nsrc
+            x = squeeze(con(j, i, f, :));
+            str = regstats(y,x,'linear');
+            if str.beta(2) > 0
+                Rpos(j, i, f) = sqrt(str.rsquare);
+                Ppos(j, i, f) = str.tstat.pval(2);
+                Tpos(j, i, f) = str.tstat.t(2);
+            elseif str.beta(2) < 0
+                Rneg(j, i, f) = sqrt(str.rsquare);
+                Pneg(j, i, f) = str.tstat.pval(2);
+                Tneg(j, i, f) = str.tstat.t(2);
+            end
+        end
+    end
+end
+
+
+
+for freq = 1 : 1
+    
+    P2 = Ppos(:, :, freq);
+    T2 = Tpos(:, :, freq);
+    R2 = Rpos(:, :, freq);
+    P2 = P2 + P2' + eye(nsrc);
+    T2 = T2 + T2';
+    index1 = unique([find(P2 > pthr); find(P2 == 0)]);
+    T2(index1) = 0;
+    R2 = R2 + R2';
+    R2(index1) = 0;
+    P2(index1) = 0;
+    n = length(find(R2 ~= 0));
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    con1p = squeeze(con(:,:,freq,:));
+    
+    for i = 1 : size(con1p, 3)
+        tmp = con1p(:, :, i);
+        tmp(index1) = 0;
+        con1p(:, :, i) = tmp;
+    end
+    
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    
+    check1 = [];
+    for i = 1 : nsrc
+        for j = 1 : nsrc
+            if con1p(i, j, freq, 1) ~= 0
+                check1 = [check1; [i, j, P2(i,j), R2(i,j)]];
+            end
+        end
+    end
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    P2 = Pneg(:, :, freq);
+    T2 = Tneg(:, :, freq);
+    R2 = Rneg(:, :, freq);
+    P2 = P2 + P2' + eye(nsrc);
+    T2 = T2 + T2';
+    index2 = unique([find(P2 > pthr); find(P2 == 0)]);
+    T2(index2) = 0;
+    R2 = R2 + R2';
+    R2(index2) = 0;
+    P2(index2) = 0;
+    n = length(find(R2 ~= 0));
+    
+    
+    
+    con1n = squeeze(con(:,:,freq,:));
+    
+    for i = 1 : size(con1n, 3)
+        tmp = con1n(:, :, i);
+        tmp(index2) = 0;
+        con1n(:, :, i) = tmp;
+    end
+    
+    check2 = [];
+    for i = 1 : nsrc
+        for j = 1 : nsrc
+            if con1n(i, j, freq, 1) ~= 0
+                check2 = [check2; [i, j, P2(i,j), R2(i,j)]];
+            end
+        end
+    end
+    
+    
+    Delindex{freq} = [{index1}, {index2}];
+    PairCheck{freq} = [{check1}, {check2}];
+    
+end
+
+PrintCheck.Delindex = Delindex;
+PrintCheck.PairCheck = PairCheck;
+PrintCheck.title =[{'region1'},{'region2'},{'pvalue'},{'connectivity'}];
+
+save(fullfile(savepath, savename), 'PrintCheck');
